@@ -47,12 +47,27 @@
 ;-----------------------------------------------------------------------------*/
 
 #include "lws.h"
+#include "lws_port.h"
 
 /*******************************************************************************
 ;
-;	D E F I N E S
+;	M A C R O S
 ;
 ;-----------------------------------------------------------------------------*/
+
+/** ****************************************************************************
+ *
+ * 	\brief 	Get pointer to struct from pointer to struct member.
+ *
+ * 	\param	structType_	Struct data type.
+ * 	\param	membName_	Struct member name.
+ * 	\param	membPtr_	Pointer to struct member.
+ *
+ * 	\return	Pointer to struct.
+ *
+ ******************************************************************************/
+#define lwo__getStructPtr(structType_, membName_, membPtr_) \
+	((structType_ *)(void *)(((char *)(membPtr_)) - offsetof(structType_, membName_)))
 
 /*******************************************************************************
 ;
@@ -66,6 +81,10 @@
 ;
 ;-----------------------------------------------------------------------------*/
 
+static void lws__taskTimerExpFn(
+	lws_Timer * pTimer
+);
+
 static bool lws__taskPrioCompare(
 	const lwo_DlListNode * pNode1,
 	const lwo_DlListNode * pNode2,
@@ -76,10 +95,6 @@ static bool lws__timerListCompare(
 	const lwo_DlListNode * pNode1,
 	const lwo_DlListNode * pNode2,
 	const void *		   pParam
-);
-
-static lws_Tcb * lws_popFirstReady(
-	void
 );
 
 /*******************************************************************************
@@ -99,7 +114,7 @@ lws_Tcb * lwo__currTcb_p = NULL;
 static volatile lws_Ticks lws__timestamp = 0;
 
 static lwo_DlList lws__readyTasks;
-static lwo_DlList lws__timers;
+static lwo_DlList lws__runningTimers;
 
 static const lwo_DlListCmp lws__taskCompare = {
 	lws__taskPrioCompare,
@@ -123,7 +138,7 @@ void lws_init(
 	void
 ) {
 	lwo_dlListInit(&lws__readyTasks);
-	lwo_dlListInit(&lws__timers);
+	lwo_dlListInit(&lws__runningTimers);
 }
 
 /** ****************************************************************************
@@ -142,11 +157,13 @@ void lws_initTask(
 	lws_TaskFn * pTaskFn,
 	lws_Priority priority
 ) {
-	if (pTcb) {
+	if (pTcb != NULL) {
 		lwo_dlListNodeInit(&pTcb->listNode);
 		pTcb->location = 0U;
 		pTcb->pTaskFn = pTaskFn;
 		pTcb->currPrio = priority;
+
+		pTcb->taskTimer.pExpFn = lws__taskTimerExpFn;
 
 		lwo_dlListInsert(&lws__readyTasks, &pTcb->listNode, &lws__taskCompare);
 	}
@@ -162,11 +179,23 @@ void lws_initTask(
 void lws_runSceduler(
 	void
 ) {
-	lwo__currTcb_p = lws_popFirstReady();
+	for (;;) {
+		lwo_DlListNode * pNode = NULL;
 
-	while (1) {
+		/*-------------------------- Critical section ------------------------*/
+		{
+			lws__PortIntState intState = 0;
+			lws__portDisableIntr(&intState);
+
+			pNode = lwo_dlListPopFirst(&lws__readyTasks);
+
+			lws__portRestoreIntr(intState);
+		}
+		/*-------------------------- Critical section ------------------------*/
+
+		lwo__currTcb_p = lwo__getStructPtr(lws_Tcb, listNode, pNode);
+
 		lwo__currTcb_p->pTaskFn();
-		lwo__currTcb_p = lws_popFirstReady();
 	}
 }
 
@@ -176,6 +205,9 @@ void lws_runSceduler(
  *
  * 	\param		pTcb		Pointer to the TCB of the task.
  *
+ * 	\retval		true		The current task should yield.
+ * 	\retval		false		The current task may continue.
+ *
  * 	\note		May not be called from an ISR.
  *
  ******************************************************************************/
@@ -184,26 +216,39 @@ bool lws_makeReady(
 ) {
 	bool doSwitch = false;
 
-	if (pTcb) {
-		lwo_dlListInsert(&lws__readyTasks, &pTcb->listNode, &lws__taskCompare);
+	if (pTcb != NULL) {
+		/*-------------------------- Critical section ------------------------*/
+		{
+			lws__PortIntState intState = 0;
+			lws__portDisableIntr(&intState);
 
-		/*
-		 * Check if the current task should yield because of the supplied
-		 * ready task.
-		 */
-		if (pTcb->currPrio > lwo__currTcb_p->currPrio) {
-			/*
-			 * The task has a higher priority than the current task. The
-			 * current task should yield.
-			 */
 			lwo_dlListInsert(
 				&lws__readyTasks,
-				&lwo__currTcb_p->listNode,
+				&pTcb->listNode,
 				&lws__taskCompare
 			);
 
-			doSwitch = true;
+			/*
+			 * Check if the current task should yield because of the new
+			 * ready task.
+			 */
+			if (pTcb->currPrio > lwo__currTcb_p->currPrio) {
+				/*
+				 * The task has a higher priority than the current task. The
+				 * current task should yield.
+				 */
+				lwo_dlListInsert(
+					&lws__readyTasks,
+					&lwo__currTcb_p->listNode,
+					&lws__taskCompare
+				);
+
+				doSwitch = true;
+			}
+
+			lws__portRestoreIntr(intState);
 		}
+		/*-------------------------- Critical section ------------------------*/
 	}
 
 	return doSwitch;
@@ -229,8 +274,18 @@ void lws_startTimer(
 	};
 
 	lwo_dlListNodeInit(&pTimer->listNode);
-	pTimer->expTime = lws__timestamp + timeout;
-	lwo_dlListInsert(&lws__timers, &pTimer->listNode, &cmp);
+
+	/*-------------------------- Critical section ----------------------------*/
+	{
+		lws__PortIntState intState = 0;
+		lws__portDisableIntr(&intState);
+
+		pTimer->expTime = lws__timestamp + timeout;
+		lwo_dlListInsert(&lws__runningTimers, &pTimer->listNode, &cmp);
+
+		lws__portRestoreIntr(intState);
+	}
+	/*-------------------------- Critical section ----------------------------*/
 }
 
 /** ****************************************************************************
@@ -246,30 +301,60 @@ void lws_startTimer(
 void lws_tickIsr(
 	void
 ) {
-	lws__timestamp++;
+	/*-------------------------- Critical section ----------------------------*/
+	{
+		lws__PortIntState intState = 0;
+		lws__portDisableIntrIsr(&intState);
 
-	lws_Timer * pTimer = (lws_Timer *)lwo_dlListPeekFirst(&lws__timers);
-	while (pTimer != NULL && pTimer->expTime == lws__timestamp) {
-		lwo_dlListRemove(pTimer);
-		lws_makeReady(pTimer->pTcb);
-		pTimer = (lws_Timer *)lwo_dlListPeekFirst(&lws__timers);
+		lws__timestamp++;
+
+		for (;;) {
+			lwo_DlListNode * pListNode = lwo_dlListPeekFirst(
+				&lws__runningTimers
+			);
+			if (pListNode == NULL) {
+				break;
+			}
+
+			lws_Timer * pTimer = lwo__getStructPtr(
+				lws_Timer,
+				listNode,
+				pListNode
+			);
+
+			if (pTimer->expTime != lws__timestamp) {
+				break;
+			}
+
+			/*
+			 * The timer has expired.
+			 */
+			lwo_dlListRemove(&pTimer->listNode);
+			pTimer->pExpFn(pTimer);
+		}
+
+		lws__portRestoreIntrIsr(intState);
 	}
+	/*-------------------------- Critical section ----------------------------*/
 }
 
 /** ****************************************************************************
  *
- * 	\brief		Pop the first task from the ready tasks lists.
+ * 	\brief		Task timer expiration function.
  *
- * 	\details	The first task is the task with the highest priority.
+ * 	\param		pTimer		Pointer to the expired task timer.
  *
- * 	\note		May not be called from an ISR.
+ * 	\details	Called when a task timer expires.
+ *
+ * 	\note		Called from an ISR with interrupts disabled!
  *
  ******************************************************************************/
-static lws_Tcb * lws_popFirstReady(
-	void
+static void lws__taskTimerExpFn(
+	lws_Timer * pTimer
 ) {
-	lwo_DlListNode * pNode = lwo_dlListPopFirst(&lws__readyTasks);
-	return (lws_Tcb *)pNode;
+	lws_Tcb * pTcb = lwo__getStructPtr(lws_Tcb, taskTimer, pTimer);
+
+	lwo_dlListInsert(&lws__readyTasks, &pTcb->listNode, &lws__taskCompare);
 }
 
 /** ****************************************************************************
@@ -323,6 +408,7 @@ static bool lws__timerListCompare(
 ) {
 	const lws_Timer * pTimer1 = (lws_Timer *)pNode1;
 	const lws_Timer * pTimer2 = (lws_Timer *)pNode2;
+	(void)pParam;
 
 	lws_Ticks currTime = lws__timestamp;
 

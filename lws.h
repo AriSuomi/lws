@@ -138,8 +138,6 @@ typedef struct {
 
 extern lws_Tcb * lwo__currTcb_p;
 
-extern volatile lws_Ticks lws__timestamp;
-
 /*******************************************************************************
 ;
 ;	F U N C T I O N S
