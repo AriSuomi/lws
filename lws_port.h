@@ -7,7 +7,11 @@
 /**
  * Type for storing interrupt enable/disable state.
  */
-typedef uint32_t lws__PortIntState;
+typedef size_t lws__PortIntState;
+
+void lws__portInit(
+	void
+);
 
 void lws__portDisableIntr(
 	lws__PortIntState * pIntState

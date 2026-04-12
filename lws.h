@@ -40,8 +40,8 @@
  *
  ******************************************************************************/
 
-#ifndef LWO_H_INCLUDED
-#define LWO_H_INCLUDED
+#ifndef LWS_H_INCLUDED
+#define LWS_H_INCLUDED
 
 /*******************************************************************************
 ;
@@ -59,7 +59,7 @@
 ;-----------------------------------------------------------------------------*/
 
 #define LWS_TASK_START()                \
-	switch (lwo__currTcb_p->location) { \
+	switch (lws__currTcb_p->location) { \
 		case 0:
 
 #define LWS_TASK_END() \
@@ -68,25 +68,41 @@
 		}
 
 #define LWS_SUSPEND()                                \
-	lwo__currTcb_p->location = (uint16_t)(__LINE__); \
+	lws__currTcb_p->location = (uint16_t)(__LINE__); \
 	return;                                          \
 	case __LINE__:
 
-#define LWS_YIELD()                \
-	lws_makeReady(lwo__currTcb_p); \
-	LWS_SUSPEND()
+#define LWS_YIELD()						\
+	do {								\
+		lws__makeReady(lws__currTcb_p); \
+		LWS_SUSPEND();					\
+	} while (0)
 
 #define LWS_RESUME(pTcb_)           \
 	do {                            \
-		if (lws_makeReady(pTcb_)) { \
+		if (lws__makeReady(pTcb_)) { \
 			LWS_SUSPEND();          \
 		}                           \
 	} while (0)
 
-#define LWS_WAIT(ticks_)                                       \
-	do {                                                       \
-		lws_start_timer(&lwo__currTcb_p->taskTimer, (ticks_)); \
-		LWS_SUSPEND();                                         \
+#define LWS_WAIT(ticks_)                                      \
+	do {                                                      \
+		lws_startTimer(&lws__currTcb_p->taskTimer, (ticks_)); \
+		LWS_SUSPEND();                                        \
+	} while (0)
+
+#define LWS_SEMA_WAIT(pSema_)        \
+	do {                             \
+		if (lws__semaWait(pSema_)) { \
+			LWS_SUSPEND();           \
+		}                            \
+	} while (0)
+
+#define LWS_SEMA_SIGNAL(pSema_)        \
+	do {                               \
+		if (lws__semaSignal(pSema_)) { \
+			LWS_SUSPEND();             \
+		}                              \
 	} while (0)
 
 /*******************************************************************************
@@ -105,6 +121,8 @@ typedef enum {
 	LWS_PRIO_NORMAL,
 	LWS_PRIO_HIGH,
 } lws_Priority;
+
+typedef struct lws__Sema lws__Sema;
 
 typedef struct lws_timer_tag lws_Timer;
 
@@ -126,9 +144,9 @@ typedef struct {
 	lws_Timer	   taskTimer;
 } lws_Tcb;
 
-typedef struct {
+struct lws__Sema {
 	lwo_DlList waitingTasks;
-} lws_Semaphore;
+};
 
 /*******************************************************************************
 ;
@@ -136,7 +154,7 @@ typedef struct {
 ;
 ;-----------------------------------------------------------------------------*/
 
-extern lws_Tcb * lwo__currTcb_p;
+extern lws_Tcb * lws__currTcb_p;
 
 /*******************************************************************************
 ;
@@ -154,7 +172,7 @@ void lws_initTask(
 	lws_Priority priority
 );
 
-void lws_runSceduler(
+void lws_runScheduler(
 	void
 );
 
@@ -167,8 +185,28 @@ void lws_tickIsr(
 	void
 );
 
-bool lws_makeReady(
+bool lws__makeReady(
 	lws_Tcb * pTcb
+);
+
+void lws_resumeIsr(
+	lws_Tcb * pTcb
+);
+
+void lws_semaInit(
+	lws__Sema * pSema
+);
+
+bool lws__semaWait(
+	lws__Sema * pSema
+);
+
+bool lws__semaSignal(
+	lws__Sema * pSema
+);
+
+void lws_semaSignalIsr(
+	lws__Sema * pSema
 );
 
 #endif
