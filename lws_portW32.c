@@ -1,49 +1,87 @@
 
+#include <windows.h>
 
-#include <Windows.h>
-
+#include "lws.h"
 #include "lws_port.h"
 
-static uint_fast32_t lwo__portIsrDisabled = 0;
-static uint_fast32_t lwo__portInIsr = 0;
+#define TARGET_RESOLUTION 1         // 1-millisecond target resolution
 
-static CRITICAL_SECTION lwo__portCriticalSection;
-static CRITICAL_SECTION lwo__portIsrDisable;
+static void CALLBACK multimediaTimerCallback(
+	UINT		uTimerID,
+	UINT		uMsg, 
+	DWORD_PTR	dwUser,
+	DWORD_PTR	dw1,
+	DWORD_PTR	dw2
+);
 
-/** ****************************************************************************
-*
-* 	\brief		Get current interrupt state and disable interrupts.
-*
-* 	\param[out]	pIntState_	Pointer to variable where the current interrupt
-* 							state will be stored.
-*
-* 	\note		May be called from an ISR.
-*
-******************************************************************************/
-void lws__portDisableIntr(
-	lwo__PortIntState * pIntState
+lws__PortIntState disableCount = 0;
+CRITICAL_SECTION interruptCritSect;
+
+void lws__portInit(
+	void
 ) {
-	EnterCriticalSection(&lwo__portIsrDisable);
-	*pIntState = lwo__portIsrDisabled;
-	lwo__portIsrDisabled = 1U;
+	InitializeCriticalSection(&interruptCritSect);
+
+	MMRESULT tiemerId = timeSetEvent(
+		10,
+		0,
+		multimediaTimerCallback,
+		0,
+		TIME_PERIODIC
+	);
 }
 
-/** ****************************************************************************
-*
-* 	\brief 		Restore interrupt state.
-*
-* 	\param		oldValue_	The interrupt state that should be restored.
-*
-* 	\details	No interrupt enabling is needed for targets without nested
-* 				interrupts. For those targets this macro can be left empty.
-*
-* 	\note		May be called from an ISR.
-*
-******************************************************************************/
-void lws__portRestoreIntr(
-	lwo__PortIntState oldValue
+static void CALLBACK multimediaTimerCallback(
+	UINT		uTimerID,
+	UINT		uMsg, 
+	DWORD_PTR	dwUser,
+	DWORD_PTR	dw1,
+	DWORD_PTR	dw2
 ) {
-	lwo__portIsrDisabled = oldValue;
-	LeaveCriticalSection(&lwo__portIsrDisable);
+	EnterCriticalSection(&interruptCritSect);
+	lws_tickIsr();
+	LeaveCriticalSection(&interruptCritSect);
+} 
+
+void lws__portDisableIntr(
+	lws__PortIntState * pIntState
+) {
+	EnterCriticalSection(&interruptCritSect);
+	*pIntState = disableCount++;
+}
+
+void lws__portRestoreIntr(
+	lws__PortIntState oldValue
+) {
+	if (oldValue == 0) {
+		lws__PortIntState localCount = disableCount;
+
+		while (localCount != 0) {
+			localCount--;
+			disableCount--;
+			LeaveCriticalSection(&interruptCritSect);
+		}
+	}
+}
+
+void lws__portDisableIntrIsr(
+	lws__PortIntState * pIntState
+) {
+	EnterCriticalSection(&interruptCritSect);
+	*pIntState = disableCount++;
+}
+
+void lws__portRestoreIntrIsr(
+	lws__PortIntState oldValue
+) {
+	if (oldValue == 0) {
+		lws__PortIntState localCount = disableCount;
+
+		while (localCount != 0) {
+			localCount--;
+			disableCount--;
+			LeaveCriticalSection(&interruptCritSect);
+		}
+	}
 }
 
