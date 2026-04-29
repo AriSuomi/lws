@@ -50,7 +50,7 @@
 ;-----------------------------------------------------------------------------*/
 
 #include <stdint.h>
-#include "lwo_dlList.h"
+#include "lwl/lwl_dlList.h"
 
 /*******************************************************************************
 ;
@@ -131,13 +131,13 @@ typedef void lws__TimerExpFn(
 );
 
 struct lws_timer_tag {
-	lwo_DlListNode	  listNode;
+	lwl_DlListNode	  listNode;
 	lws_Ticks		  expTime;
 	lws__TimerExpFn * pExpFn;
 };
 
 typedef struct {
-	lwo_DlListNode listNode;
+	lwl_DlListNode listNode;
 	uint16_t	   location;
 	lws_TaskFn *   pTaskFn;
 	lws_Priority   currPrio;
@@ -145,7 +145,7 @@ typedef struct {
 } lws_Tcb;
 
 struct lws__Sema {
-	lwo_DlList waitingTasks;
+	lwl_DlList waitingTasks;
 };
 
 /*******************************************************************************

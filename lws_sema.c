@@ -100,7 +100,7 @@ lws_Tcb * lws__semaSignalInternal(
 void lws_semaInit(
 	lws__Sema * pSema
 ) {
-	lwo_dlListInit(&pSema->waitingTasks);
+	lwl_dlListInit(&pSema->waitingTasks);
 }
 
 /** ****************************************************************************
@@ -122,18 +122,18 @@ bool lws__semaWait(
 		lws__PortIntState intState = 0;
 		lws__portDisableIntr(&intState);
 
-		const lwo_DlListNode * pFirstNode = lwo_dlListPeekFirst(
+		const lwl_DlListNode * pFirstNode = lwl_dlListPeekFirst(
 			&pSema->waitingTasks
 		);
 
-		if (pFirstNode == (lwo_DlListNode *)pSema) {
+		if (pFirstNode == (lwl_DlListNode *)pSema) {
 			/*
 			 * The semaphore has been signaled when no task was waiting for it.
 			 * In this case a pointer to the semaphore itself has been added to
 			 * the waiting list. We just clear the pointer and continue
 			 * execution.
 			 */
-			lwo_dlListSneekFirst(&pSema->waitingTasks, NULL);
+			lwl_dlListSneekFirst(&pSema->waitingTasks, NULL);
 			should_suspend = false;
 
 		} else {
@@ -141,7 +141,7 @@ bool lws__semaWait(
 			* The semaphore has not been signaled.
 			* Add the current task to the waiting list.
 			*/
-			lwo_dlListInsert(
+			lwl_dlListInsert(
 				&pSema->waitingTasks,
 				&lws__currTcb_p->listNode,
 				&lws__taskCompare
@@ -225,17 +225,17 @@ lws_Tcb * lws__semaSignalInternal(
 	lws__Sema * pSema
 ) {
 	lws_Tcb * pReadyTcb = NULL;
-	lwo_DlListNode * pNode = lwo_dlListPeekFirst(&pSema->waitingTasks);
+	lwl_DlListNode * pNode = lwl_dlListPeekFirst(&pSema->waitingTasks);
 
-	if (pNode != (lwo_DlListNode *)pSema) {
+	if (pNode != (lwl_DlListNode *)pSema) {
 		if (pNode == NULL) {
 			/*
 			* No task is waiting for the semaphore. Store a pointer to the
 			* semaphore itself to mark it as signaled.
 			*/
-			lwo_dlListSneekFirst(
+			lwl_dlListSneekFirst(
 				&pSema->waitingTasks,
-				(lwo_DlListNode *)pSema
+				(lwl_DlListNode *)pSema
 			);
 
 		} else {
@@ -243,7 +243,7 @@ lws_Tcb * lws__semaSignalInternal(
 			* A task was waiting for the semaphore.
 			* Make it ready.
 			*/
-			lwo_dlListRemove(pNode);
+			lwl_dlListRemove(pNode);
 
 			pReadyTcb = lws__getStructPtr(lws_Tcb, listNode, pNode);
 		}
